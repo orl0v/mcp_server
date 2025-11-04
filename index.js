@@ -51,7 +51,7 @@ app.post("/mcp", async (req, res) => {
   try {
     const payload = req.body;
 
-    // Inject default context for search_shop_catalog if missing
+    // Ensure default context for search_shop_catalog
     if (
       payload?.method === "tools/call" &&
       payload?.params?.name === "search_shop_catalog"
@@ -61,32 +61,49 @@ app.post("/mcp", async (req, res) => {
       }
     }
 
+    console.log("⬅️  Incoming from ElevenLabs:", JSON.stringify(payload));
+
     const upstreamResponse = await fetch(SHOPIFY_MCP_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
 
-    const data = await upstreamResponse.json();
+    const text = await upstreamResponse.text();
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      console.error("⚠️ Shopify returned non-JSON:", text.slice(0, 300));
+      return res.status(500).json({
+        jsonrpc: "2.0",
+        id: payload.id,
+        error: {
+          code: -32001,
+          message: "Invalid JSON from Shopify MCP endpoint",
+          data: text.slice(0, 300)
+        }
+      });
+    }
 
-    // Try to parse text blocks containing JSON
+    // Convert "json" blocks back into readable text
     if (data?.result?.content) {
       data.result.content = data.result.content.map((block) => {
-        if (block.type === "text") {
-          try {
-            const parsed = JSON.parse(block.text);
-            return { type: "json", json: parsed };
-          } catch {
-            return block;
-          }
+        if (block.type === "text") return block;
+        if (block.type === "json" && block.json) {
+          return {
+            type: "text",
+            text: JSON.stringify(block.json, null, 2)
+          };
         }
         return block;
       });
     }
 
+    console.log("⬅️  Shopify response normalized:", JSON.stringify(data).slice(0, 400));
     res.status(200).json(data);
   } catch (err) {
-    console.error("❌ Error in /mcp:", err);
+    console.error("❌ Proxy error:", err);
     res.status(500).json({
       jsonrpc: "2.0",
       id: req.body?.id || 0,
@@ -98,6 +115,7 @@ app.post("/mcp", async (req, res) => {
     });
   }
 });
+
 
 // --- Fallback route ---
 app.use((req, res) => {
